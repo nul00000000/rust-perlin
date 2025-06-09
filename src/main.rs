@@ -22,7 +22,7 @@ impl Vecf {
 	}
 
 	fn as_veci(&self) -> Veci {
-		let nv: Vec<i32> = self.v.iter().map(|a| *a as i32).collect();
+		let nv: Vec<i64> = self.v.iter().map(|a| *a as i64).collect();
 		let len = nv.len();
 		return Veci {v: nv, n: len};
 	}
@@ -172,6 +172,33 @@ impl ops::BitXor for Vecf {
 	}
 }
 
+impl ops::BitXor for &Vecf {
+	type Output = f64;
+
+	fn bitxor(self, o: Self) -> f64 {
+		let sum: f64 = self.v.iter().zip(o.v.iter()).map(|(a, b)| a * b).sum();
+		return sum;
+	}
+}
+
+impl ops::BitXor<&Vecf> for Vecf {
+	type Output = f64;
+
+	fn bitxor(self, o: &Vecf) -> f64 {
+		let sum: f64 = self.v.iter().zip(o.v.iter()).map(|(a, b)| a * b).sum();
+		return sum;
+	}
+}
+
+impl ops::BitXor<Vecf> for &Vecf {
+	type Output = f64;
+
+	fn bitxor(self, o: Vecf) -> f64 {
+		let sum: f64 = self.v.iter().zip(o.v.iter()).map(|(a, b)| a * b).sum();
+		return sum;
+	}
+}
+
 impl ops::Neg for Vecf {
 	type Output = Vecf;
 
@@ -195,12 +222,12 @@ impl ops::Not for Vecf {
 }
 
 struct Veci {
-	v: Vec<i32>,
+	v: Vec<i64>,
 	n: usize
 }
 
 impl Veci {
-	fn new(v: Vec<i32>) -> Veci {
+	fn new(v: Vec<i64>) -> Veci {
 		let len = v.len();
 		return Veci {v, n: len};
 	}
@@ -212,21 +239,21 @@ impl Veci {
 	}
 }
 
-impl ops::Div<i32> for Veci {
+impl ops::Div<i64> for Veci {
 	type Output = Veci;
 
-	fn div(self, o: i32) -> Veci {
-		let nv: Vec<i32> = self.v.iter().map(|a| a / o).collect();
+	fn div(self, o: i64) -> Veci {
+		let nv: Vec<i64> = self.v.iter().map(|a| a / o).collect();
 		let len = nv.len();
 		return Veci {v: nv, n: len};
 	}
 }
 
-impl ops::Div<i32> for &Veci {
+impl ops::Div<i64> for &Veci {
 	type Output = Veci;
 
-	fn div(self, o: i32) -> Veci {
-		let nv: Vec<i32> = self.v.iter().map(|a| a / o).collect();
+	fn div(self, o: i64) -> Veci {
+		let nv: Vec<i64> = self.v.iter().map(|a| a / o).collect();
 		let len = nv.len();
 		return Veci {v: nv, n: len};
 	}
@@ -247,29 +274,27 @@ fn int_hash(i: i64) -> i64 {
 	return x;
 }
 
-fn int_vec_hash(vec: Veci, start: i64) -> i64 {
+fn int_vec_hash(vec: &Veci, start: i64) -> i64 {
 	let mut hash = start;
-	for v in vec.v {
-		hash = int_hash(hash % -4776276827692571787 + v as i64);
+	for v in &vec.v {
+		hash = int_hash(hash % -4776276827692571787 + *v as i64);
 	}
 	return hash;
 }
 
-fn get_gridvalue_n(pos: Veci) -> Vecf {
-	let mut s = DefaultHasher::new();
-
+fn get_gridvalue_n(pos: &Veci) -> Vecf {
 	let mut bm: Vec<f64> = vec![0.0; pos.n];
 
 	for (i, _) in pos.v.iter().enumerate() {
-		(pos.v.clone(), i * 2).hash(&mut s);
-		let t = (s.finish() % 256) as f64 / 256.0 * 2.0 * PI;
-		(pos.v.clone(), i * 2 + 1).hash(&mut s);
-		let r = (((s.finish() % 256 + 1) as f64 / 256.0).ln() * -2.0).sqrt();
-		bm[i] = r * t.cos();
+		// let t = (int_vec_hash(&pos, i as i64 * pos.n as i64) % 256) as f64 / 256.0 * 2.0 * PI;
+		// let r = (((int_vec_hash(&pos, i as i64 * pos.n as i64 + 1) % 256 + 1) as f64 / 256.0).ln() * -2.0).sqrt();
+		// bm[i] = r * t.cos();
+		bm[i] = (int_vec_hash(&pos, i as i64 * pos.n as i64) % 256) as f64 / 255.0 * 2.0 - 1.0;
 	}
 
-	let out = !Vecf::new(bm);
+	let out = Vecf::new(bm);
 
+	
 	return out;
 }
 
@@ -299,7 +324,7 @@ fn get_gridvalue_n(pos: Veci) -> Vecf {
 
 fn get_perlin_n_inner(pos: &Vecf, origin: &Vecf, f_dims: usize) -> f64 {
 	if f_dims == 0 {
-		let v = get_gridvalue_n(pos.as_veci());
+		let v = get_gridvalue_n(&pos.as_veci());
 		let cv = origin - pos;
 		let val = cv ^ v;
 		return val;
@@ -327,9 +352,9 @@ fn get_perlin_n(pos: &Vecf) -> f64 {
 
 fn get_perlin_n_grad_inner(pos: &Vecf, origin: &Vecf, f_dims: usize) -> (Vecf, f64) {
 	if f_dims == 0 {
-		let v = get_gridvalue_n(pos.as_veci());
+		let v = get_gridvalue_n(&pos.as_veci());
 		let cv = origin - pos;
-		let val = cv ^ v.clone();
+		let val = cv ^ &v;
 		return (v, val);
 	} else {
 		let mut fpos = pos.clone();
@@ -380,14 +405,14 @@ fn render_3d(grid_size: usize, scale: f64, threshold: f64, w1: f64, w2: f64) -> 
 			for k in 0..grid_size {
 				let gy = grid_size - 1 - (j * 7 / 10 + k * 3 / 10);
 				let gx = i * 7 / 10 + k * 3 / 10;
-				let pi = &Veci::new(vec![i as i32, j as i32, k as i32]);
+				let pi = &Veci::new(vec![i as i64, j as i64, k as i64]);
 				let p = &Vecf::new(vec![i as f64 / scale, j as f64 / scale, k as f64 / scale, w1, w2]);
 				if !depth_buffer[gy][gx] {
 					let (norm, val) = get_perlin_grad_n(p);
 					if val < threshold {
-						let t = 
-						if pi.v.iter().any(|a| *a == 0 || *a == (grid_size - 1) as i32) {
-							Vecf::new(pi.v.iter().map(|a| if (*a == 0) {-1.0} else if (*a == (grid_size as i32 - 1)) {1.0} else {0.0}).collect())
+						let n = 
+						if pi.v.iter().any(|a| *a == 0 || *a == (grid_size - 1) as i64) {
+							Vecf::new(pi.v.iter().map(|a| if (*a == 0) {-1.0} else if (*a == (grid_size as i64 - 1)) {1.0} else {0.0}).collect())
 						} else {
 							norm
 						};
@@ -395,9 +420,9 @@ fn render_3d(grid_size: usize, scale: f64, threshold: f64, w1: f64, w2: f64) -> 
 						// pixels[gx][gy][2] = (-t[2]).max(0.0);
 						depth_buffer[gy][gx] = true;
 	
-						pixels[gy][gx][0] = t[0] * 0.5 + 0.5;
-						pixels[gy][gx][1] = t[1] * 0.5 + 0.5;
-						pixels[gy][gx][2] = t[2] * 0.5 + 0.5;
+						pixels[gy][gx][0] = n[0] * 0.5 + 0.5;
+						pixels[gy][gx][1] = n[1] * 0.5 + 0.5;
+						pixels[gy][gx][2] = n[2] * 0.5 + 0.5;
 					}
 				}
 			}
@@ -445,15 +470,19 @@ fn main() {
 
 	let start = SystemTime::now().duration_since(UNIX_EPOCH).expect("time backwards?").as_millis();
 
-	for i in 0..1000 {
-		get_perlin_grad_n(&Vecf::new(vec![i as f64, 0.5, 0.5, 0.5, 0.5]));
+	let mut accum = 0;
+	for i in 0..1000000 {
+		// get_perlin_grad_n(&Vecf::new(vec![i as f64, 0.5, 0.5, 0.5, 0.5]));
+		// accum += get_gridvalue_n(&Veci::new(vec![i, 0, 0, 0, 0]))[0];
+		// accum += int_vec_hash(&Veci::new(vec![i, 0, 0, 0, 0]), i);
+		accum += &Veci::new(vec![i, 0, 0, 0, 0]).v[0];
 	}
 
 	let end = SystemTime::now().duration_since(UNIX_EPOCH).expect("time backwards?").as_millis();
 
 	let len = end - start;
 
-	println!("Total time: {}ms, Time per iteration: {}us", len, len);
+	println!("Total time: {}ms, Time per iteration: {}us/{}ns, accum: {}", len, len / 1000, len, accum);
 
 	// for i in 0..16 {
 	// 	let a = i as f64 / 16.0 * PI * 2.0;
