@@ -2,6 +2,7 @@ use std::f64::consts::PI;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops;
 use std::{path::Path};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Clone)]
 struct Vecf {
@@ -235,6 +236,25 @@ fn smoothstep(x: f64) -> f64 {
 	return 3.0 * x * x - 2.0 * x * x * x;
 }
 
+fn d_smoothstep(x: f64) -> f64 {
+	return 6.0 * x - 6.0 * x * x;
+}
+
+fn int_hash(i: i64) -> i64 {
+	let mut x = ((i >> 32) ^ i) % -4776276827692571787;
+    x = ((x >> 32) ^ x) % -4776276827692571787;
+    x = (x >> 32)  ^ x;
+	return x;
+}
+
+fn int_vec_hash(vec: Veci, start: i64) -> i64 {
+	let mut hash = start;
+	for v in vec.v {
+		hash = int_hash(hash % -4776276827692571787 + v as i64);
+	}
+	return hash;
+}
+
 fn get_gridvalue_n(pos: Veci) -> Vecf {
 	let mut s = DefaultHasher::new();
 
@@ -248,7 +268,7 @@ fn get_gridvalue_n(pos: Veci) -> Vecf {
 		bm[i] = r * t.cos();
 	}
 
-	let out = !Vecf::new(bm.clone());
+	let out = !Vecf::new(bm);
 
 	return out;
 }
@@ -302,33 +322,40 @@ fn get_perlin_n_inner(pos: &Vecf, origin: &Vecf, f_dims: usize) -> f64 {
 fn get_perlin_n(pos: &Vecf) -> f64 {
 	let val = get_perlin_n_inner(pos, pos, pos.n);
 
-	return val * 0.5 + 0.5;
+	return val;
 }
 
-fn get_perlin_n_grad_inner(pos: &Vecf, origin: &Vecf, f_dims: usize) -> Vecf {
+fn get_perlin_n_grad_inner(pos: &Vecf, origin: &Vecf, f_dims: usize) -> (Vecf, f64) {
 	if f_dims == 0 {
 		let v = get_gridvalue_n(pos.as_veci());
-		return v;
+		let cv = origin - pos;
+		let val = cv ^ v.clone();
+		return (v, val);
 	} else {
 		let mut fpos = pos.clone();
 		let mut cpos = pos.clone();
 		fpos[f_dims - 1] = pos[f_dims - 1].floor();
 		cpos[f_dims - 1] = pos[f_dims - 1].ceil();
 
-		let fv = get_perlin_n_grad_inner(&fpos, origin, f_dims - 1);
-		let cv = get_perlin_n_grad_inner(&cpos, origin, f_dims - 1);
+		let (fv, f) = get_perlin_n_grad_inner(&fpos, origin, f_dims - 1);
+		let (cv, c) = get_perlin_n_grad_inner(&cpos, origin, f_dims - 1);
 
 		let interp = smoothstep(pos[f_dims - 1] - pos[f_dims - 1].floor());
-		let total = (&cv - &fv) * interp + fv;
+		let d_interp = d_smoothstep(pos[f_dims - 1] - pos[f_dims - 1].floor());
 
-		return total;
+		let val = f + (c - f) * interp;
+
+		let mut total = (&cv - &fv) * interp + fv;
+		total[f_dims - 1] += (c - f) * d_interp;
+
+		return (total, val);
 	}
 }
 
-fn get_perlin_grad_n(pos: &Vecf) -> Vecf {
-	let val = !get_perlin_n_grad_inner(pos, pos, pos.n);
+fn get_perlin_grad_n(pos: &Vecf) -> (Vecf, f64) {
+	let (vec, val) = get_perlin_n_grad_inner(pos, pos, pos.n);
 
-	return val;
+	return (!vec, val);
 }
 
 fn render_2d(pixels: Vec<Vec<f64>>) -> Vec<u8> {
@@ -343,76 +370,35 @@ fn vecf_to_rgb(pixels: Vec<Vecf>) -> Vec<u8> {
 	return pixels.iter().map(|v| vec![(v[0] * 255.0) as u8, (v[1] * 255.0) as u8, (v[2] * 255.0) as u8]).collect::<Vec<Vec<u8>>>().iter().flatten().collect::<Vec<&u8>>().iter().map(|v| **v).collect::<Vec<u8>>();
 }
 
-fn render_3d(grid_size: usize, scale: f64) -> Vec<u8> {
-	let mut pixels = vec![vec![vec![1.0; 3]; grid_size]; grid_size];
+fn render_3d(grid_size: usize, scale: f64, threshold: f64, w1: f64, w2: f64) -> Vec<u8> {
+	let mut pixels = vec![vec![vec![0.0, 0.0, 0.3]; grid_size]; grid_size];
 	let mut depth_buffer = vec![vec![false; grid_size]; grid_size];
 
 	for i in (0..grid_size).rev() {
 		println!("Rendering slice {i}/{grid_size}");
 		for j in (0..grid_size).rev() {
 			for k in 0..grid_size {
+				let gy = grid_size - 1 - (j * 7 / 10 + k * 3 / 10);
+				let gx = i * 7 / 10 + k * 3 / 10;
 				let pi = &Veci::new(vec![i as i32, j as i32, k as i32]);
-				let p = &(pi.as_vecf() / scale);
-				if !depth_buffer[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10] && get_perlin_n(p) < 0.4 {
-					let t = if pi.v.iter().any(|a| *a == 0 || *a == (grid_size - 1) as i32) {
-						let mut a = Vecf::new(pi.v.iter().map(|a| if (*a == 0) {-1.0} else if (*a == (grid_size as i32 - 1)) {1.0} else {0.0}).collect());
-						a[2] = -a[2];
-						// Vecf::new(vec![0.0, 0.0, 0.0])
-						a
-					} else {
-						get_perlin_grad_n(p)
-					};
-
-					// pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][0] = (-t[0]).max(0.0);
-					// pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][1] = (-t[1]).max(0.0);
-					// pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][2] = (-t[2]).max(0.0);
-					depth_buffer[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10] = true;
-
-					pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][0] = t[1];
-					pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][1] = 0.0;
-					pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][2] = 0.0;
-				}
-			}
-		}
-	}
-
-	return pixels.iter().flatten().collect::<Vec<&Vec<f64>>>().iter().map(|v| *v).flatten().collect::<Vec<_>>().iter().map(|x| (*x * 255.0) as u8).collect();
-}
-
-fn render_3d_bad(grid_size: usize, scale: f64) -> Vec<u8> {
-	let mut pixels = vec![vec![vec![1.0; 3]; grid_size]; grid_size];
-	let mut depth_buffer = vec![vec![false; grid_size]; grid_size];
-	let nss = 3;
-
-	for i in (0..grid_size).rev() {
-		println!("Rendering slice {i}/{grid_size}");
-		for j in (0..grid_size).rev() {
-			for k in 0..grid_size {
-				let pi = &Veci::new(vec![i as i32, j as i32, k as i32]);
-				let p = &(pi.as_vecf() / scale);
-				if !depth_buffer[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10] && get_perlin_n(p) < 0.4 {
-					let mut t = Vecf::new(vec![0.0, 0.0, 0.0]);
-
-                    for i1 in (if i < nss {0} else {i - nss})..(if i >= grid_size - nss {grid_size - 1} else {i + nss + 1}) {
-                        for j1 in (if j < nss {0} else {j - nss})..(if j >= grid_size - nss {grid_size - 1} else {j + nss + 1}) {
-                            for k1 in (if k < nss {0} else {k - nss})..(if k >= grid_size - nss {grid_size - 1} else {k + nss + 1}) {
-                                if get_perlin_n(&(Veci::new(vec![i1 as i32, j1 as i32, k1 as i32]).as_vecf() / scale)) < 0.4 {
-                                    t = t + Vecf::new(vec![i1 as f64 - i as f64, j1 as f64 - j as f64, k1 as f64 - k as f64]);
-                                }
-                            }
-                        }
-                    }
-
-                    t = -!t;
-
-					// pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][0] = (-t[0]).max(0.0);
-					// pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][1] = (-t[1]).max(0.0);
-					// pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][2] = (-t[2]).max(0.0);
-					depth_buffer[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10] = true;
-
-					pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][0] = t[1];
-					pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][1] = 0.0;
-					pixels[grid_size - 1 - (j * 7 / 10 + k * 3 / 10)][i * 7 / 10 + k * 3 / 10][2] = 0.0;
+				let p = &Vecf::new(vec![i as f64 / scale, j as f64 / scale, k as f64 / scale, w1, w2]);
+				if !depth_buffer[gy][gx] {
+					let (norm, val) = get_perlin_grad_n(p);
+					if val < threshold {
+						let t = 
+						if pi.v.iter().any(|a| *a == 0 || *a == (grid_size - 1) as i32) {
+							Vecf::new(pi.v.iter().map(|a| if (*a == 0) {-1.0} else if (*a == (grid_size as i32 - 1)) {1.0} else {0.0}).collect())
+						} else {
+							norm
+						};
+	
+						// pixels[gx][gy][2] = (-t[2]).max(0.0);
+						depth_buffer[gy][gx] = true;
+	
+						pixels[gy][gx][0] = t[0] * 0.5 + 0.5;
+						pixels[gy][gx][1] = t[1] * 0.5 + 0.5;
+						pixels[gy][gx][2] = t[2] * 0.5 + 0.5;
+					}
 				}
 			}
 		}
@@ -422,42 +408,63 @@ fn render_3d_bad(grid_size: usize, scale: f64) -> Vec<u8> {
 }
 
 //main image, gradient map
-fn _render_2d_and_grad(grid_size: usize, scale: f64) -> (Vec<u8>, Vec<u8>) {
-    let pixels: Vec<Vec<f64>> = (0..grid_size).map(|y| (0..grid_size).map(|x| (get_perlin_n(&Vecf::new(vec![x as f64 / scale, y as f64 / scale])))).collect::<Vec<f64>>()).collect::<Vec<_>>();
+fn render_2d_in_4d(grid_size: usize, scale: f64, z: f64, w: f64) -> Vec<u8> {
+    let pixels: Vec<Vec<f64>> = (0..grid_size).map(|y| (0..grid_size).map(|x| (get_perlin_n(&Vecf::new(vec![x as f64 / scale, y as f64 / scale, z as f64, w as f64])) * 0.75 + 0.5)).collect::<Vec<f64>>()).collect::<Vec<_>>();
     let buffer = grey_to_rgb(render_2d(pixels));
 
-    let grads: Vec<Vec<Vecf>> = (0..grid_size).map(|y| (0..grid_size).map(|x| (get_perlin_grad_n(&Vecf::new(vec![x as f64 / scale, y as f64 / scale]))) * 0.5 + 0.5).collect::<Vec<Vecf>>()).collect::<Vec<_>>();
-    let buffergrad = vecf_to_rgb(grads.iter().flatten().collect::<Vec<&Vecf>>().iter().map(|x| (*x).clone()).collect());
-
-    return (buffer, buffergrad);
+    return buffer;
 }
 
 fn main() {
 
-	// let pixels: [[u8; 256]; 256] = [(0..256).map(|y| (get_value(0, y) * 255.0) as u8).collect::<Vec<u8>>().try_into().unwrap(); 256];
 	let grid_size = 128;
 	let scale = 32.0;
-	// let voxels: Vec<Vec<Vec<f64>>> = (0..grid_size).map(|z| {
-	//   println!("z={z} done");
 
-	//   (0..grid_size).map(|y| (0..grid_size).map(|x| (get_perlin_n(Vecf::new(vec![x as f64 / scale, y as f64 / scale, z as f64 / scale])))).collect::<Vec<f64>>()).collect::<Vec<Vec<f64>>>()
-	// }).collect::<Vec<_>>();
-	let buffer = render_3d_bad(grid_size, scale);
-	
-    // let (buffer, buffer_grad) = _render_2d_and_grad(grid_size, scale);
-	
-	let error = image::save_buffer(&Path::new("image.png"), &buffer, grid_size as u32, grid_size as u32, image::ExtendedColorType::Rgb8);
-	if error.is_err() {
-		println!("Fail :(");
-	} else {
-		println!("Finished :D");
+	// for i in 0..101 {
+	// 	let buffer = render_3d(grid_size, scale, (i - 50) as f64 * 0.015);
+
+	// 	let error = image::save_buffer(&Path::new(&format!("images/image{i}.png")), &buffer, grid_size as u32, grid_size as u32, image::ExtendedColorType::Rgb8);
+	// 	if error.is_err() {
+	// 		println!("Fail :(");
+	// 	} else {
+	// 		println!("Finished image{i}.png");
+	// 	}
+	// }
+
+	// for i in 0..100 {
+	// 	let a = i as f64 / 100.0 * PI * 2.0;
+	// 	let buffer = render_2d_in_4d(grid_size, scale, a.cos() * 2.0, a.sin() * 2.0);
+
+	// 	let error = image::save_buffer(&Path::new(&format!("images/image{i}.png")), &buffer, grid_size as u32, grid_size as u32, image::ExtendedColorType::Rgb8);
+	// 	if error.is_err() {
+	// 		println!("Fail :(");
+	// 	} else {
+	// 		println!("Finished image{i}.png");
+	// 	}
+	// }
+
+	let start = SystemTime::now().duration_since(UNIX_EPOCH).expect("time backwards?").as_millis();
+
+	for i in 0..1000 {
+		get_perlin_grad_n(&Vecf::new(vec![i as f64, 0.5, 0.5, 0.5, 0.5]));
 	}
 
-    // let error = image::save_buffer(&Path::new("grad.png"), &buffer_grad, grid_size as u32, grid_size as u32, image::ExtendedColorType::Rgb8);
-	// if error.is_err() {
-	// 	println!("Fail :(");
-	// } else {
-	// 	println!("Finished :D");
+	let end = SystemTime::now().duration_since(UNIX_EPOCH).expect("time backwards?").as_millis();
+
+	let len = end - start;
+
+	println!("Total time: {}ms, Time per iteration: {}us", len, len);
+
+	// for i in 0..16 {
+	// 	let a = i as f64 / 16.0 * PI * 2.0;
+	// 	let buffer = render_3d(grid_size, scale, -0.2, a.cos() * 0.1, a.sin() * 0.1);
+
+	// 	let error = image::save_buffer(&Path::new(&format!("images/image{i}.png")), &buffer, grid_size as u32, grid_size as u32, image::ExtendedColorType::Rgb8);
+	// 	if error.is_err() {
+	// 		println!("Fail :(");
+	// 	} else {
+	// 		println!("Finished image{i}.png");
+	// 	}
 	// }
 
 }
